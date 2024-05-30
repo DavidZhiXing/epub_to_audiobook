@@ -39,12 +39,84 @@ class EpubBookParser(BaseBookParser):
         if self.book.get_metadata('DC', 'creator'):
             return self.book.get_metadata("DC", "creator")[0][0]
         return "Unknown"
+    
+    def prep_text(self, text_in):
+        # Replace some chars with comma to improve TTS by introducing a pause
+        text = (
+            text_in.replace("--", ", ")
+            .replace("—", ", ")
+            .replace(";", ", ")
+            .replace(":", ", ")
+            .replace("''", ", ")
+            .replace("’", "'")
+            .replace('“', '"')
+            .replace('”', '"')
+            .replace("◇", "")
+            .replace(" . . . ", ", ")
+            .replace("... ", ", ")
+            .replace("«", " ")
+            .replace("»", " ")
+            .replace("[", "")
+            .replace("]", "")
+            .replace("&", " and ")
+            .replace(" GNU ", " new ")
+            .replace("\n", " \n")
+            .replace("*", " ")
+            .strip()
+        )
+        return text
+    
+    blacklist = [
+        "[document]",
+        "noscript",
+        "header",
+        "html",
+        "meta",
+        "head", 
+        "input",
+        "script",
+        # Add 'pre' and 'code' to the blacklist
+        "pre",
+        "code",
+    ]
+    
+    # def chap2text(self, chap):
+    #     blacklist = [
+    #         "[document]",
+    #         "noscript",
+    #         "header",
+    #         "html",
+    #         "meta",
+    #         "head",
+    #         "input",
+    #         "script",
+    #     ]
+    #     output = ""
+    #     soup = BeautifulSoup(chap, "html.parser")
+    #     if self.skiplinks:
+    #         # Remove everything that is an href
+    #         for a in soup.findAll("a", href=True):
+    #             a.extract()
+    #     # Always skip reading links that are just a number (footnotes)
+    #     for a in soup.findAll("a", href=True):
+    #         if not any(char.isalpha() for char in a.text):
+    #             a.extract()
+    #     text = soup.find_all(string=True)
+    #     for t in text:
+    #         if t.parent.name not in blacklist:
+    #             output += "{} ".format(t)
+    #     return output
 
     def get_chapters(self, break_string) -> List[Tuple[str, str]]:
         chapters = []
         for item in self.book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
             content = item.get_content()
             soup = BeautifulSoup(content, "lxml")
+            for tag in soup.find_all(self.blacklist):
+                tag.decompose()
+                
+            for a in soup.findAll("a", href=True):
+                a.decompose()
             title = ""
             title_levels = ['title', 'h1', 'h2', 'h3']
             for level in title_levels:
@@ -55,6 +127,7 @@ class EpubBookParser(BaseBookParser):
             logger.debug(f"Raw text: <{raw[:]}>")
 
             # Replace excessive whitespaces and newline characters based on the mode
+            raw = self.prep_text(raw)
             if self.config.newline_mode == "single":
                 cleaned_text = re.sub(r"[\n]+", break_string, raw.strip())
             elif self.config.newline_mode == "double":
@@ -70,6 +143,18 @@ class EpubBookParser(BaseBookParser):
             if self.config.remove_endnotes:
                 cleaned_text = re.sub(r'(?<=[a-zA-Z.,!?;”")])\d+', "", cleaned_text)
                 logger.debug(f"Cleaned text step 4: <{cleaned_text[:100]}>")
+                
+            # if text is chinese, remove the space between chinese characters
+            if self.config.language.startswith("zh"):
+                # 进一步确认是否为汉字句子
+                # 首先拆分cleaned_text为句子
+                sentences = re.split(r"[。？！]", cleaned_text)
+                # 判断句子是否包含汉字，移除句子中的空格
+                for sentence in sentences:
+                    if re.search(r'[\u4e00-\u9fa5]', sentence):
+                        cleaned_sentence = re.sub(r"\s+", "", sentence)
+                        cleaned_text = cleaned_text.replace(sentence, cleaned_sentence)
+                logger.debug(f"Cleaned text step 5: <{cleaned_text[:100]}>")
 
             # fill in the title if it's missing
             if title == "":
